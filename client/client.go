@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -18,16 +19,24 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 	// Get file size and make sure it exists
 	info, err := os.Stat(fileName)
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalln("File not found:", err)
 	}
 
+	// Extract just the filename to send to server
+	fileNameOnly := filepath.Base(fileName)
+
 	// Tell the server we want to store this file
-	msgHandler.SendStorageRequest(fileName, uint64(info.Size()))
-	if ok, _ := msgHandler.ReceiveResponse(); !ok {
+	msgHandler.SendStorageRequest(fileNameOnly, uint64(info.Size()))
+	ok, msg := msgHandler.ReceiveResponse()
+	if !ok {
+		log.Println("Server rejected storage request:", msg)
 		return 1
 	}
 
-	file, _ := os.Open(fileName)
+	file, err := os.Open(fileName)
+	if err != nil {
+		log.Fatalln("Failed to open file:", err)
+	}
 	md5 := md5.New()
 	w := io.MultiWriter(msgHandler, md5)
 	io.CopyN(w, file, info.Size()) // Checksum and transfer file at same time
@@ -35,7 +44,9 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 
 	checksum := md5.Sum(nil)
 	msgHandler.SendChecksumVerification(checksum)
-	if ok, _ := msgHandler.ReceiveResponse(); !ok {
+	ok, msg = msgHandler.ReceiveResponse()
+	if !ok {
+		log.Println("Storage failed:", msg)
 		return 1
 	}
 
@@ -43,18 +54,30 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 	return 0
 }
 
-func get(msgHandler *messages.MessageHandler, fileName string) int {
+func get(msgHandler *messages.MessageHandler, fileName string, destDir string) int {
 	fmt.Println("GET", fileName)
 
-	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
-	if err != nil {
-		log.Println(err)
+	// Extract just the filename to request from server
+	fileNameOnly := filepath.Base(fileName)
+
+	// Change to destination directory if specified
+	if destDir != "." {
+		if err := os.Chdir(destDir); err != nil {
+			log.Fatalln("Failed to change to destination directory:", err)
+		}
+	}
+
+	msgHandler.SendRetrievalRequest(fileNameOnly)
+	ok, msg, size := msgHandler.ReceiveRetrievalResponse()
+	if !ok {
+		log.Println("Server rejected retrieval request:", msg)
 		return 1
 	}
 
-	msgHandler.SendRetrievalRequest(fileName)
-	ok, _, size := msgHandler.ReceiveRetrievalResponse()
-	if !ok {
+	// Create file in current directory (which is now destDir if specified)
+	file, err := os.OpenFile(fileNameOnly, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+	if err != nil {
+		log.Println("Failed to create file:", err)
 		return 1
 	}
 
@@ -64,13 +87,18 @@ func get(msgHandler *messages.MessageHandler, fileName string) int {
 	file.Close()
 
 	clientCheck := md5.Sum(nil)
-	checkMsg, _ := msgHandler.Receive()
+	checkMsg, err := msgHandler.Receive()
+	if err != nil {
+		log.Println("Failed to receive checksum:", err)
+		return 1
+	}
 	serverCheck := checkMsg.GetChecksum().Checksum
 
 	if util.VerifyChecksum(serverCheck, clientCheck) {
 		log.Println("Successfully retrieved file.")
 	} else {
 		log.Println("FAILED to retrieve file. Invalid checksum.")
+		return 1
 	}
 
 	return 0
@@ -102,15 +130,10 @@ func main() {
 	if len(os.Args) >= 5 {
 		dir = os.Args[4]
 	}
-	openDir, err := os.Open(dir)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	openDir.Close()
 
 	if action == "put" {
 		os.Exit(put(msgHandler, fileName))
 	} else if action == "get" {
-		os.Exit(get(msgHandler, fileName))
+		os.Exit(get(msgHandler, fileName, dir))
 	}
 }

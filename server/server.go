@@ -9,11 +9,23 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 )
 
 func handleStorage(msgHandler *messages.MessageHandler, request *messages.StorageRequest) {
-	log.Println("Attempting to store", request.FileName)
-	file, err := os.OpenFile(request.FileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+	// Extract just the filename from the path
+	fileName := filepath.Base(request.FileName)
+	log.Println("Attempting to store", fileName)
+
+	// Check if file already exists
+	if _, err := os.Stat(fileName); err == nil {
+		msgHandler.SendResponse(false, "File already exists")
+		msgHandler.Close()
+		return
+	}
+
+	// Try to create the file (will fail if exists due to O_EXCL, or if disk space issues)
+	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
 	if err != nil {
 		msgHandler.SendResponse(false, err.Error())
 		msgHandler.Close()
@@ -28,28 +40,48 @@ func handleStorage(msgHandler *messages.MessageHandler, request *messages.Storag
 
 	serverCheck := md5.Sum(nil)
 
-	clientCheckMsg, _ := msgHandler.Receive()
+	clientCheckMsg, err := msgHandler.Receive()
+	if err != nil {
+		msgHandler.SendResponse(false, "Failed to receive checksum")
+		msgHandler.Close()
+		return
+	}
 	clientCheck := clientCheckMsg.GetChecksum().Checksum
 
 	if util.VerifyChecksum(serverCheck, clientCheck) {
 		log.Println("Successfully stored file.")
+		msgHandler.SendResponse(true, "File stored successfully")
 	} else {
 		log.Println("FAILED to store file. Invalid checksum.")
+		os.Remove(fileName) // Remove the file if checksum doesn't match
+		msgHandler.SendResponse(false, "Checksum verification failed")
 	}
 }
 
 func handleRetrieval(msgHandler *messages.MessageHandler, request *messages.RetrievalRequest) {
-	log.Println("Attempting to retrieve", request.FileName)
+	// Extract just the filename from the path
+	fileName := filepath.Base(request.FileName)
+	log.Println("Attempting to retrieve", fileName)
 
 	// Get file size and make sure it exists
-	info, err := os.Stat(request.FileName)
+	info, err := os.Stat(fileName)
 	if err != nil {
-		log.Fatalln(err)
+		if os.IsNotExist(err) {
+			msgHandler.SendRetrievalResponse(false, "File does not exist", 0)
+		} else {
+			msgHandler.SendRetrievalResponse(false, err.Error(), 0)
+		}
+		msgHandler.Close()
+		return
 	}
 
 	msgHandler.SendRetrievalResponse(true, "Ready to send", uint64(info.Size()))
 
-	file, _ := os.Open(request.FileName)
+	file, err := os.Open(fileName)
+	if err != nil {
+		msgHandler.Close()
+		return
+	}
 	md5 := md5.New()
 	w := io.MultiWriter(msgHandler, md5)
 	io.CopyN(w, file, info.Size()) // Checksum and transfer file at same time
@@ -102,8 +134,14 @@ func main() {
 	if len(os.Args) >= 3 {
 		dir = os.Args[2]
 	}
+
+	// Ensure the storage directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Fatalln("Failed to create storage directory:", err)
+	}
+
 	if err := os.Chdir(dir); err != nil {
-		log.Fatalln(err)
+		log.Fatalln("Failed to change to storage directory:", err)
 	}
 
 	fmt.Println("Listening on port:", port)
