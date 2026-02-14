@@ -9,10 +9,24 @@ import (
 	"log"
 	"net"
 	"os"
+	"syscall"
 )
 
 func handleStorage(msgHandler *messages.MessageHandler, request *messages.StorageRequest) {
 	log.Println("Attempting to store", request.FileName)
+
+	// See if we can fit the file first
+	var stat syscall.Statfs_t
+	syscall.Statfs(".", &stat)
+	availableBytes := stat.Bavail * uint64(stat.Bsize)
+	if availableBytes < request.Size {
+		msgHandler.SendResponse(false, fmt.Sprintf(
+			"Not enough space on system! Need: %d, Have: %d",
+			request.Size, availableBytes))
+		msgHandler.Close()
+		return
+	}
+
 	file, err := os.OpenFile(request.FileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
 	if err != nil {
 		msgHandler.SendResponse(false, err.Error())
