@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -44,7 +45,8 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 }
 
 func get(msgHandler *messages.MessageHandler, fileName string) int {
-	fmt.Println("GET", fileName)
+	base := filepath.Base(fileName) // get base file since we're now passing as savedir/file.txt
+	fmt.Println("GET", base)
 
 	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
 	if err != nil {
@@ -52,7 +54,7 @@ func get(msgHandler *messages.MessageHandler, fileName string) int {
 		return 1
 	}
 
-	msgHandler.SendRetrievalRequest(fileName)
+	msgHandler.SendRetrievalRequest(base)
 	ok, _, size := msgHandler.ReceiveRetrievalResponse()
 	if !ok {
 		return 1
@@ -106,11 +108,11 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	openDir.Close()
+	defer openDir.Close()
 
 	if action == "put" {
 		os.Exit(put(msgHandler, fileName))
 	} else if action == "get" {
-		os.Exit(get(msgHandler, fileName))
+		os.Exit(get(msgHandler, filepath.Join(dir, fileName))) // pass as ./file.txt or savedir/file.txt
 	}
 }
