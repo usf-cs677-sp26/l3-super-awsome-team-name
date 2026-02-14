@@ -22,8 +22,10 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 		log.Fatalln(err)
 	}
 
+	base := filepath.Base(fileName)
+
 	// Tell the server we want to store this file
-	msgHandler.SendStorageRequest(fileName, uint64(info.Size()))
+	msgHandler.SendStorageRequest(base, uint64(info.Size()))
 	if ok, _ := msgHandler.ReceiveResponse(); !ok {
 		return 1
 	}
