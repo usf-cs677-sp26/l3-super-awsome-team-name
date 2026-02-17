@@ -61,4 +61,5 @@ See `TESTING_GUIDE.md` for detailed testing instructions.
 
 ## Changes for Compatibility
 
-_No compatibility changes made yet. This section will be updated after testing with teammates._
+No compatibility changes were necessary. 
+![alt](get-put-test.png)
